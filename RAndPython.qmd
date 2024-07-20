@@ -1,0 +1,158 @@
+---
+title: "R and Python"
+format: html
+editor: visual
+---
+
+## Introduction
+
+In this document, I am experimenting with running R and Python in the same file. Posit recently developed a new tool called Positron for data analytics in R and Python, which runs on top of VS Code. However, today I am experimenting with an older tool, Quarto, which is known for its ability to run both R and Python in the same project.
+
+Today, I will be analyzing the famous Titanic dataset to predict the survival rate. Note that this file is not about making the best prediction, but rather to demonstrate how we can take advantage of both R and Python in the same file. I will start by using R to estimate a logistic model. Then, I will use Python to estimate a random forest model within the same workbook.
+
+To get started, I import the very handy `tidyverse` package along with `caTools`. Note that in the chunk below, the `{r}` indicates the use of R code.
+
+```{r}
+library(tidyverse)
+library(caTools)
+```
+
+In the next chunk, I import the Titanic data from the web. We can have a glance at what the data contains.
+
+```{r}
+df <- read_csv('https://raw.githubusercontent.com/agconti/kaggle-titanic/master/data/train.csv')
+
+str(df)
+```
+
+Age will be used in the model. It has few NA values. I don't want to lose any columns due to missing Age value hence I will replace all NA values with the mean of the Age.
+
+```{r}
+df$Age[is.na(df$Age)] <-  mean(df$Age, na.rm = T)
+
+```
+
+Survived is the value we are predicting. It is the factor of interest for this example. A simple overview of the factor of interest is as follows -
+
+```{r}
+ggplot(df, aes(Survived, fill = as.factor(Survived)))+
+  geom_bar()+
+  ggtitle("Barplot to represent Passenger Count who Survived vs who Died")
+```
+
+Now, I will partition the data into training and test sets. I am using the `caTools` library to split the data into a 70/30 ratio. The `caTools` function `sample.split` ensures that both the training and test sets contain the same proportion of the factor of interest, which in this case is "Survived" (yes or no).
+
+```{r}
+sample <- sample.split(df$Survived, SplitRatio = 0.7)
+train <- subset(df, sample == TRUE)
+test <- subset(df, sample == FALSE)
+```
+
+Note that since I have not set any seeds, the model results might vary slightly each time. This is because `sample.split` splits the data randomly.
+
+The result of the logistic model is printed out as follows. Age has a negative relationship with the survival rate, which implies that older people had a lower chance of survival compared to younger individuals. Class also shows a negative relationship, but since it is a categorical factor, passengers in higher classes (1 and 2 and then 3) had a higher survival rate than those in lower classes. Additionally, being female significantly increases the chances of survival.
+
+```{r}
+logit <- glm(Survived ~ as.factor(Pclass)+Sex+Age, family="binomial",data=train)
+summary(logit)
+```
+
+Now, with the model, we can predict the probabilities on the test set. I have set the probability threshold for survival at greater than 0.5 (survived) and less than 0.5 (not survived). Since the goal is not to achieve the best prediction, we will not be performing AUC and ROC analysis to determine the most appropriate cutoff.
+
+```{r}
+results <- predict(logit,test)
+results <- ifelse(results>0.5,1,0)
+```
+
+```{r}
+confusionMatrix <- table(test$Survived, results)
+confusionMatrix
+```
+
+The accuracy of the model given below.
+
+```{r}
+sum(diag(confusionMatrix)) / sum(confusionMatrix)
+```
+
+Now comes the most important part. So far, we have imported data in R, performed data analytics using R libraries, and created a logistic model using base R functions. Next, I will use the same data in this workbook but switch to Python.
+
+Notice how the next chunk starts with `{python}`. This indicates to the compiler that the code is now in Python. Unlike R, I can't directly run the model from the dataset, so I will need to separate the columns into training and test sets, and distinguish between features and labels.
+
+Also, note that I am using the dataset that was imported in R. Python cannot directly access it. However, Posit and Quarto have a useful feature where you can access R data by prefixing it with 'r.'. See below how I use `r.train` to access the training data from the dataframe that I was initially working with in R.
+
+```{python}
+X_train = r.train[["Pclass","Age","Sex"]]
+Y_train = r.train["Survived"]
+
+```
+
+```{python}
+X_test = r.test[["Pclass","Age","Sex"]]
+Y_test = r.test["Survived"]
+```
+
+Now I import the packages from Python to run model using Python codes.
+
+```{python}
+from sklearn.ensemble import RandomForestRegressor
+import pandas as pd
+import numpy as np
+```
+
+Python cannot understand factor variable by itself. Using the pandas library, I make dummy variables.
+
+```{python}
+X_train = pd.get_dummies(X_train, columns = ['Pclass','Sex'], drop_first=True)
+X_test = pd.get_dummies(X_test, columns = ['Pclass','Sex'], drop_first=True)
+
+```
+
+Here, I run the Random Forest model using the vectors above.
+
+```{python}
+rf = RandomForestRegressor(n_estimators = 1000, random_state = 42)
+rf.fit(X_train, Y_train)
+```
+
+Now, with the model, I make a prediction in the test set.
+
+```{python}
+predictions = rf.predict(X_test)
+```
+
+Again, like before, 0.5 is the cut-off for survive or not.
+
+```{python}
+predicted = np.where(predictions >0.5,1,0)
+```
+
+Now, let us see how the model did.
+
+```{python}
+matrix = pd.crosstab(index=Y_test, columns=predicted, rownames=['Actual'], colnames=['Predicted'])
+
+matrix
+```
+
+Now, I will also bring the files back to work with R language. The syntax is similar, but instead of using `r.filename`, I will use `reticulate::py$filename`.
+
+```{r}
+tabulate <- reticulate::py$matrix
+tabulate
+```
+
+I am not yet sure how datasets are handled across R and Python. R handles datasets as tables or matrices by default, while Python uses packages like Polars and Pandas. To get the accuracy, I had to convert the confusion matrix into an R matrix before making the calculation.
+
+```{r}
+tabulate <- matrix(unlist(tabulate),nrow=2,byrow = T)
+sum(diag(tabulate)) / sum(tabulate)
+```
+
+And here is the accuracy from the Random Forest model that we ran using Python.
+
+Well, now you should be able to see how I can run R and Python interchangeably. To be honest, in this workbook, I don't see a significant advantage. Personally, I prefer doing all my data analytics work in R, including visualizations. however, one thing I find really comfortable in Python is writing functions, especially formulas that include recursive functions.
+
+With this, I hope I have clearly demonstrated how Quarto documents work and how you can take advantage of both R and Python.
+
+PS: I use the Anaconda environment for Python. RStudio can easily detect Python from Anaconda and get started with it. RStudio should also be able to connect with Docker containers.
